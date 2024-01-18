@@ -8,19 +8,14 @@ import copy as _copy
 
 from dataclasses import dataclass as _dataclass
 from openpyxl.worksheet._read_only import ReadOnlyWorksheet as _WS
-from typing import Callable as _Callable, Literal as _Literal, Protocol as _Protocol
+from typing import Callable as _Callable, Literal as _Literal
 
 
 @_dataclass
-class ComparisonParameters:
+class Cell:
     value: str
     row_index: int
     column_index: int
-
-
-class ComparisonCallback(_Protocol):
-    def __call__(self, cell: ComparisonParameters) -> bool:
-        ...
 
 
 class Data:
@@ -92,10 +87,10 @@ class Data:
 
     def set_bounds(
         self,
-        top_left_callback: ComparisonCallback,
-        top_right_callback: ComparisonCallback = None,
-        bottom_left_callback: ComparisonCallback = None,
-        bottom_right_callback: ComparisonCallback = None,
+        top_left_callback: _Callable[[Cell], bool],
+        top_right_callback: _Callable[[Cell], bool] = None,
+        bottom_left_callback: _Callable[[Cell], bool] = None,
+        bottom_right_callback: _Callable[[Cell], bool] = None,
     ):
         return Bounds(self.__data).set_bounds(
             top_left_callback,
@@ -116,14 +111,16 @@ class Bounds:
         self.__bottom_row_offset = 0
         self.__left_column_offset = 0
 
-    def __get_coordinaets(self, callback: ComparisonCallback | None, start: int = 0):
+    def __get_coordinaets(
+        self, callback: _Callable[[Cell], bool] | None, start: int = 0
+    ):
         if callback is None:
             return []
 
         coordinates = []
         for r_index, row in enumerate(self.__data[start:]):
             for c_index, cell in enumerate(row):
-                if callback(ComparisonParameters(cell, r_index, c_index)):
+                if callback(Cell(cell, r_index + start, c_index)):
                     coordinates.append((r_index + start, c_index))
         return coordinates
 
@@ -187,10 +184,10 @@ class Bounds:
 
     def set_bounds(
         self,
-        top_left_callback: ComparisonCallback,
-        top_right_callback: ComparisonCallback = None,
-        bottom_left_callback: ComparisonCallback = None,
-        bottom_right_callback: ComparisonCallback = None,
+        top_left_callback: _Callable[[Cell], bool],
+        top_right_callback: _Callable[[Cell], bool] = None,
+        bottom_left_callback: _Callable[[Cell], bool] = None,
+        bottom_right_callback: _Callable[[Cell], bool] = None,
     ):
         new_bounds = _copy.deepcopy(self)
 
