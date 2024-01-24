@@ -1,96 +1,126 @@
 # %%
-import warnings as _warnings
 import pandas as _pd
-import openpyxl as _openpyxl
 import os as _os
 import fnmatch as _fnmatch
 import copy as _copy
+import re as _re
 
-from dataclasses import dataclass as _dataclass
-from openpyxl.worksheet._read_only import ReadOnlyWorksheet as _WS
-from typing import Callable as _Callable, Literal as _Literal
-
-
-@_dataclass
-class Cell:
-    value: str
-    row_index: int
-    column_index: int
+_pd.set_option("display.max_columns", None)
+from typing import Callable as _Callable
 
 
 class Data:
-    def __init__(self, data: list[list]):
-        self.__data = data if data else []
-
-    def __set__(self, value):
-        self.__data = value
-
-    def __iter__(self):
-        return iter(self.__data)
+    def __init__(self, data: _pd.DataFrame):
+        self.__data = data
 
     def __repr__(self):
-        return "\n".join(map(str, self.__data))
+        return self.__data.__repr__()
+
+    def __str__(self):
+        return self.__data.__str__()
 
     def __len__(self):
-        return len(self.__data)
+        return len(self.__data.data)
 
-    def remove_empty_rows(self):
-        return Data(
-            [
-                row
-                for row in self.__data
-                if any(cell is not None and cell != 0 for cell in row)
-            ]
+    def __iter__(self):
+        return self.__data.__iter__()
+
+    @property
+    def data(self):
+        return self.__data
+
+    @property
+    def shape(self):
+        return self.__data.shape
+
+    @property
+    def columns(self):
+        return self.__data.columns
+
+    def __extract_values(self, value):
+        if type(value) == str:
+            if _re.search(r"\[.*\]", value):
+                return value.split("[")[1].split("]")[0]
+
+        return value
+
+    def __generate_headers(self, height: int = 1):
+        df_ = self.__data
+        if df_.shape[0] > height:
+            df_.iloc[0:height] = df_.iloc[0:height].ffill(axis=1)
+            df_.iloc[0:height] = df_.iloc[0:height].ffill(axis=0)
+            columns = _pd.MultiIndex.from_frame(
+                df_.iloc[:height].T.astype(str),
+                names=list(range(height)),
+            )
+            df_ = df_.iloc[height:]
+            df_.columns = columns
+
+        return df_
+
+    def to_pivoted_dataframe(
+        self,
+        column_width: int = 1,
+        header_row_height: int = 1,
+        var_names: list[str] = ["TIME_PERIOD"],
+        value_name: str = "OBS_VALUE",
+        id_names: list[str] = ["Component"],
+    ):
+        if column_width != len(id_names):
+            raise Exception("id_names must be the same length as width")
+
+        df = self.__generate_headers(height=header_row_height)
+
+        if len(df.columns):
+            cols = list(df.columns)
+            if type(df.columns) == _pd.MultiIndex:
+                for index in range(len(cols[0]) - 1):
+                    cols[index] = (id_names[index],) * len(cols[index])
+                df.columns = _pd.MultiIndex.from_tuples(cols)
+            else:
+                cols[0] = id_names
+                df.columns = cols
+
+        df = (
+            df.melt(
+                id_vars=list(df.columns[:column_width]),
+                value_vars=list(df.columns[column_width:]),
+                value_name=value_name,
+                var_name=var_names,
+            )
+            .dropna(subset=[value_name])
+            .astype({value_name: "float"}, errors="ignore")
+            .reset_index(drop=True)
         )
 
-    def remove_empty_columns(self):
-        transposed_worksheet = list(map(list, zip(*self.__data)))
-        cleaned_transposed_worksheet = [
-            col for col in transposed_worksheet if any(cell is not None for cell in col)
-        ]
-        cleaned_worksheet = list(map(list, zip(*cleaned_transposed_worksheet)))
+        df = df.map(self.__extract_values)
 
-        return Data(cleaned_worksheet)
+        cols = list(df.columns)
+        cols[:column_width] = id_names
+        df.columns = cols
+
+        return df
+
+    def to_dataframe(self, header_row_height=None):
+        if header_row_height and header_row_height > 0:
+            return self.__generate_headers(height=header_row_height)
+        return self.__data
+
+    def remove_empty_rows(self):
+        return Data(self.__data.dropna(how="all").reset_index(drop=True))
+
+    def remove_empty_columns(self):
+        return Data(self.__data.dropna(axis=1, how="all").reset_index(drop=True))
 
     def remove_empty_rows_and_columns(self):
         return self.remove_empty_rows().remove_empty_columns()
 
-    def clean_multi_row_columns(self, height: int):
-        if height == 0 or height == 1:
-            return Data(self.__data[0]) if len(self.__data) > 0 else Data([])
-
-        new_columns = []
-        for p_index, row in enumerate(self.__data[0:height]):
-            new_array = []
-            last_value = ""
-            for c_index, item in enumerate(row):
-                if item is None:
-                    if c_index == 0:
-                        new_array.append(self.__data[0:height][p_index - 1][c_index])
-                        continue
-                    if c_index > 0 and last_value:
-                        new_array.append(last_value)
-                else:
-                    new_array.append(item)
-                    last_value = item
-
-            new_columns.append(new_array)
-
-        final = [*new_columns, *self.__data[height:]]
-
-        return Data(final)
-
-    def to_dataframe(self, header_row_height: int = 1):
-        return _pd.DataFrame(
-            self.__data[header_row_height:], columns=self.__data[0:header_row_height]
-        )
-
     def set_bounds(
         self,
-        top_left_callback: _Callable[[Cell], bool],
-        top_right_callback: _Callable[[Cell], bool] = None,
-        bottom_left_callback: _Callable[[Cell], bool] = None,
-        bottom_right_callback: _Callable[[Cell], bool] = None,
+        top_left_callback: _Callable[[any], bool] | tuple[int, int],
+        top_right_callback: _Callable[[any], bool] | tuple[int, int] | None = None,
+        bottom_left_callback: _Callable[[any], bool] | tuple[int, int] | None = None,
+        bottom_right_callback: _Callable[[any], bool] | tuple[int, int] | None = None,
     ):
         return Bounds(self.__data).set_bounds(
             top_left_callback,
@@ -101,238 +131,149 @@ class Data:
 
 
 class Bounds:
-    def __init__(self, data: Data):
-        self.__data = data if data else []
+    def __init__(self, data: _pd.DataFrame = None):
+        self.__data = data if len(data.index) else _pd.DataFrame()
         self.__bounds = []
-        self.__max_rows = len(self.__data)
-        self.__max_columns = len(self.__data[0])
+        self.__max_rows = self.__data.shape[0]
+        self.__max_columns = self.__data.shape[1] if len(data.index) > 0 else 0
         self.__top_row_offset = 0
         self.__right_column_offset = 0
         self.__bottom_row_offset = 0
         self.__left_column_offset = 0
 
-    def __get_coordinaets(
-        self, callback: _Callable[[Cell], bool] | None, start: int = 0
+    def __check_cell_callback(
+        self, value: _Callable[[any], bool] | tuple[int, int] | None
     ):
-        if callback is None:
-            return []
+        df = self.__data
+        if callable(value):
+            return df[df.map(lambda x: value(x))].stack().index.tolist()
+        if type(value) == tuple:
+            return [(value[0], value[1])]
+        return None
 
-        coordinates = []
-        for r_index, row in enumerate(self.__data[start:]):
-            for c_index, cell in enumerate(row):
-                if callback(Cell(cell, r_index + start, c_index)):
-                    coordinates.append((r_index + start, c_index))
-        return coordinates
-
-    def __safe_get(self, array: list, index: int):
-        try:
-            return array[index]
-        except IndexError:
+    def __safe_get(self, main_coordinated, array):
+        if not array:
             return None
 
-    def __safe_bound(
-        self, side: _Literal["top", "bottom", "left", "right"], value: int
-    ):
-        bounds = {
-            "top": (0, self.__max_rows),
-            "bottom": (0, self.__max_rows),
-            "left": (0, self.__max_columns),
-            "right": (0, self.__max_columns),
-        }
-
-        min_bound, max_bound = bounds[side]
-        clipped_value = min(max(value, min_bound), max_bound)
-
-        if clipped_value != value:
-            _warnings.warn(
-                f"Value {value} for side {side} is out of bounds. Clipping to {clipped_value}.",
-                UserWarning,
-                stacklevel=5,
-            )
-
-        return clipped_value
-
-    def __get_fallbacks(
-        self,
-        index: int,
-        top_left_c: list[tuple[int, int]],
-        top_left: tuple[int, int],
-        top_right: tuple[int, int] | None,
-        bottom_left: tuple[int, int] | None,
-        bottom_right: tuple[int, int] | None,
-    ):
-        if bottom_left is None:
-            for index_c, tl in enumerate(top_left_c, start=index):
-                if tl[1] == top_left[1] and tl[0] > top_left[0]:
-                    bottom_left = (min(tl[0] - 1, self.__max_rows), top_left[1])
-                    break
-            else:
-                bottom_left = (self.__max_rows, top_left[1])
-
-        if top_right is None:
-            for index_c, tl in enumerate(top_left_c, start=index):
-                if tl[0] == top_left[0] and tl[1] > top_left[1]:
-                    top_right = (top_left[0], min(tl[1] - 1, self.__max_columns))
-                    break
-            else:
-                top_right = (top_left[0], self.__max_columns)
-
-        if bottom_right is None:
-            bottom_right = (bottom_left[0], top_right[1])
-
-        return (top_left, top_right, bottom_left, bottom_right)
+        for c in array:
+            if c[1] >= main_coordinated[1] and c[0] >= main_coordinated[0]:
+                return c
 
     def set_bounds(
         self,
-        top_left_callback: _Callable[[Cell], bool],
-        top_right_callback: _Callable[[Cell], bool] = None,
-        bottom_left_callback: _Callable[[Cell], bool] = None,
-        bottom_right_callback: _Callable[[Cell], bool] = None,
+        top_left_callback: _Callable[[any], bool] | tuple[int, int],
+        top_right_callback: _Callable[[any], bool] | tuple[int, int] | None = None,
+        bottom_left_callback: _Callable[[any], bool] | tuple[int, int] | None = None,
+        bottom_right_callback: _Callable[[any], bool] | tuple[int, int] | None = None,
     ):
-        new_bounds = _copy.deepcopy(self)
+        top_left_positions = self.__check_cell_callback(top_left_callback)
+        top_right_positions = self.__check_cell_callback(top_right_callback)
+        bottom_left_positions = self.__check_cell_callback(bottom_left_callback)
+        bottom_right_positions = self.__check_cell_callback(bottom_right_callback)
 
-        top_left_c = self.__get_coordinaets(top_left_callback)
-        first_row = self.__safe_get(self.__safe_get(top_left_c, 0), 0) or 0
+        for index, position in enumerate(top_left_positions):
+            top_left = position
+            bottom_left = self.__safe_get(top_left, bottom_left_positions)
+            top_right = self.__safe_get(top_left, top_right_positions)
+            bottom_right = self.__safe_get(top_left, bottom_right_positions)
 
-        top_right_c = self.__get_coordinaets(top_right_callback, start=first_row)
-        bottom_left_c = self.__get_coordinaets(bottom_left_callback, start=first_row)
-        bottom_right_c = self.__get_coordinaets(bottom_right_callback, start=first_row)
+            if bottom_left is None:
+                for index_c, tl in enumerate(top_left_positions, start=index):
+                    if tl[1] == position[1] and tl[0] > position[0]:
+                        bottom_left = (
+                            min(tl[0] - 1, self.__data.shape[0]),
+                            position[1],
+                        )
+                        break
+                else:
+                    bottom_left = (self.__data.shape[0], position[1])
 
-        for index, top_left in enumerate(top_left_c):
-            coords = self.__get_fallbacks(
-                index=index,
-                top_left_c=top_left_c,
-                top_left=top_left,
-                top_right=self.__safe_get(top_right_c, index),
-                bottom_left=self.__safe_get(bottom_left_c, index),
-                bottom_right=self.__safe_get(bottom_right_c, index),
-            )
+            if top_right is None:
+                for index_c, tl in enumerate(top_left_positions, start=index):
+                    if tl[0] == position[0] and tl[1] > position[1]:
+                        top_right = (position[0], min(tl[1] - 1, self.__data.shape[1]))
+                        break
+                else:
+                    top_right = (position[0], self.__data.shape[1])
 
-            new_bounds.__bounds.append(coords)
+            if bottom_right is None:
+                bottom_right = (bottom_left[0], top_right[1])
 
-        return new_bounds
+            self.__bounds.append((top_left, top_right, bottom_left, bottom_right))
+
+        return self
 
     def offset(
         self,
         top_row: int = 0,
-        left_column: int = 0,
-        bottom_row: int = 0,
         right_column: int = 0,
+        bottom_row: int = 0,
+        left_column: int = 0,
     ):
-        new_bounds = _copy.deepcopy(self)
-        new_bounds.__top_row_offset = top_row
-        new_bounds.__right_column_offset = right_column
-        new_bounds.__bottom_row_offset = bottom_row
-        new_bounds.__left_column_offset = left_column
+        self.__top_row_offset = top_row
+        self.__right_column_offset = right_column
+        self.__bottom_row_offset = bottom_row
+        self.__left_column_offset = left_column
+        return self
 
-        return new_bounds
-
-    def set_max_bounds(self, max_rows: int = None, max_columns: int = None):
-        new_bounds = _copy.deepcopy(self)
-        new_bounds.__max_rows = max_rows or self.__max_rows
-        new_bounds.__max_columns = max_columns or self.__max_columns
-
-        return new_bounds
+    def set_max(self, max_rows: int = None, max_columns: int = None):
+        if max_rows:
+            self.__max_rows = max_rows
+        if max_columns:
+            self.__max_columns = max_columns
+        return self
 
     def generate_datasets(self):
-        for index, _ in enumerate(self.__bounds):
-            self.__bounds[index] = (
-                (
-                    self.__safe_bound(
-                        "top", self.__bounds[index][0][0] + self.__top_row_offset
-                    ),
-                    self.__safe_bound(
-                        "left", self.__bounds[index][0][1] + self.__left_column_offset
-                    ),
-                ),
-                (
-                    self.__safe_bound(
-                        "top", self.__bounds[index][1][0] + self.__top_row_offset
-                    ),
-                    self.__safe_bound(
-                        "right", self.__bounds[index][1][1] + self.__right_column_offset
-                    ),
-                ),
-                (
-                    self.__safe_bound(
-                        "bottom", self.__bounds[index][2][0] + self.__bottom_row_offset
-                    ),
-                    self.__safe_bound(
-                        "left", self.__bounds[index][2][1] + self.__left_column_offset
-                    ),
-                ),
-                (
-                    self.__safe_bound(
-                        "bottom", self.__bounds[index][3][0] + self.__bottom_row_offset
-                    ),
-                    self.__safe_bound(
-                        "right", self.__bounds[index][3][1] + self.__right_column_offset
-                    ),
-                ),
-            )
+        datasets: list[Data] = []
 
-        data: list[Data] = []
         for bound in self.__bounds:
-            data.append(
-                Data(
-                    [
-                        [
-                            self.__data[r_index][c_index]
-                            for c_index in range(bound[0][1], bound[1][1])
-                        ]
-                        for r_index in range(bound[0][0], bound[2][0] + 1)
-                    ]
-                )
+            top_left_row = max(bound[0][0] + self.__top_row_offset, 0)
+            top_left_column = max(bound[0][1] + self.__left_column_offset, 0)
+
+            brr = bound[3][0]
+            brc = bound[3][1]
+
+            if self.__max_rows:
+                brr = top_left_row + self.__max_rows
+            if self.__max_columns:
+                brc = top_left_column + self.__max_columns
+
+            bottom_right_row = min(
+                brr + self.__bottom_row_offset + 1, self.__data.shape[0]
+            )
+            bottom_right_column = min(
+                brc + self.__right_column_offset, self.__data.shape[1]
             )
 
-        return data
+            top_left = (top_left_row, top_left_column)
+            bottom_right = (bottom_right_row, bottom_right_column)
+
+            df_ = self.__data.iloc[
+                top_left[0] : bottom_right[0], top_left[1] : bottom_right[1]
+            ]
+
+            datasets.append(Data(df_.reset_index(drop=True)))
+
+        return datasets
 
 
 class Worksheet:
-    def __init__(self, title: str):
+    def __init__(self, title: str, data: _pd.DataFrame):
         self.title = title
-        self.data: Data = None
-
-    def load_raw_data(self, data: _WS):
-        self.data = Data([row for row in data.iter_rows(values_only=True)])
-        return self
-
-    def load_data(self, data: list[list]):
         self.data = Data(data)
-        return self
 
 
 class Workbook:
-    def __init__(self, file_name: str, ws: list[_WS], alias: str = ""):
+    def __init__(self, file_name: str, ws: dict[str, _pd.DataFrame], alias: str = ""):
         self.file_name = file_name
         self.alias = alias
         self.worksheets: list[Worksheet] = []
         self.ws_count = 0
 
-        for sheet in ws:
-            if type(sheet) is not _WS:
-                raise Exception("Invalid worksheet type")
-
-            self.worksheets.append(Worksheet(title=sheet.title).load_raw_data(sheet))
+        for sheet, value in ws.items():
+            self.worksheets.append(Worksheet(title=sheet, data=value))
 
         self.ws_count = len(self.worksheets)
-
-    def append_sheet(self, title: str, data: list[list]):
-        self.worksheets.append(Worksheet(title=title).load_data(data))
-        self.ws_count = len(self.worksheets)
-        return self
-
-    def remove_sheet(self, *, title: str = None, index: int = None):
-        if title is not None:
-            self.worksheets = [
-                sheet for sheet in self.worksheets if sheet.title != title
-            ]
-        elif index is not None:
-            self.worksheets.pop(index)
-        else:
-            raise Exception("Either title or index must be provided")
-
-        return self
 
 
 class Parser:
@@ -340,12 +281,57 @@ class Parser:
         self.workbooks: list[Workbook] = []
         self.wb_count = 0
         self.index = 0
-        pass
+        self.__type = None
+        self.__valid_file_types = [".xlsx", ".xlsm", ".xltx", ".xltm", ".csv", ".txt"]
+        self.__replacements = None
+        self.__field_master: _pd.DataFrame = None
+        self.__df_collections: dict[str, _pd.DataFrame] = {}
+        self.__data_collections: dict[str, list] = {}
 
-    def __get_file_data(self, file_path: str) -> Workbook:
+    def __get_file_data(
+        self, file_path: str, workbooks_to_ignore: list[str] = None
+    ) -> Workbook:
+        if not self.__is_valid_file(file_path, workbooks_to_ignore):
+            return self
+
         self.index = self.index + 1
-        wb = _openpyxl.load_workbook(filename=file_path, read_only=True, data_only=True)
-        return Workbook(file_path, wb.worksheets, f"T{self.index}")
+        if self.__type == "excel":
+            dfs = _pd.read_excel(file_path, sheet_name=None, header=None)
+        elif self.__type == "csv":
+            dfs = {_os.path.basename(file_path): _pd.read_csv(file_path, header=None)}
+        else:
+            raise Exception("Invalid file type")
+
+        self.workbooks.append(Workbook(file_path, dfs, f"T{self.index}"))
+
+        return self
+
+    def __is_valid_file(
+        self,
+        file_path: str,
+        ignore: list[str] = None,
+    ) -> bool:
+        is_valid_file_type = any(
+            file_path.endswith(ext) for ext in self.__valid_file_types
+        )
+
+        file_type = file_path.split(".").pop()
+
+        if "xl" in file_type:
+            self.__type = "excel"
+        elif "csv" in file_type or "txt" in file_type:
+            self.__type = "csv"
+
+        if not is_valid_file_type:
+            return False
+        if not _fnmatch.fnmatch(file_path, "*~$*"):
+            if ignore:
+                for item in ignore:
+                    if _fnmatch.fnmatch(file_path, f"*{item}*"):
+                        return False
+
+            return True
+        return False
 
     def __reload_parser(self, workbooks: list[Workbook]):
         self.workbooks = _copy.deepcopy(workbooks)
@@ -353,80 +339,96 @@ class Parser:
         self.index = self.wb_count
         return self
 
+    def __relative_path_to_absolute(self, path: str):
+        if not _os.path.isabs(path):
+            cwd = _os.getcwd()
+            return _os.path.join(cwd, path)
+        return path
+
+    def get_final_df(
+        self, collection_name: str = None, attach_field_master: bool = True
+    ):
+        if not collection_name in self.__df_collections:
+            raise Exception("Collection not found")
+
+        df = self.__df_collections[collection_name]
+
+        if self.__field_master is None:
+            print("Field master not found, returning dataset only")
+            return df
+
+        if not attach_field_master:
+            return df
+
+        self.__replacements = list(
+            self.__field_master.columns.get_level_values(1).unique()
+        )
+        self.__replacements.append("ws_title")
+        final_dataset = _pd.concat([self.__field_master, df], axis=1)
+        final_dataset = final_dataset.reindex(columns=self.__replacements)
+        return final_dataset
+
+    def get_final_data(self, collection_name: str):
+        return self.__data_collections[collection_name]
+
+    def load_field_master(self, file_path: str):
+        field_master = _pd.read_csv(_os.path.abspath(file_path))
+        self.__field_master = field_master.pivot(columns=["Field"])
+        return self
+
+    def concat_df(self, collection_name: str, df: _pd.DataFrame):
+        if collection_name in self.__df_collections:
+            self.__df_collections[collection_name] = _pd.concat(
+                [self.__df_collections[collection_name], df], axis=0, ignore_index=True
+            )
+        else:
+            self.__df_collections[collection_name] = df
+
+    def concat_data(self, collection_name: str, data: any):
+        self.__data_collections[collection_name] = data
+
     def load_files(
         self,
         folder_path: str,
         include_subfolders: bool,
-        file_types: list[str] = ["xlsx", "csv"],
         workbooks_to_ignore: list[str] = [],
-        workbooks_to_include: list[str] = [],
     ):
+        folder_path = self.__relative_path_to_absolute(folder_path)
+
         if not _os.path.exists(folder_path):
             raise Exception("Folder not found")
-
-        def __is_valid_file(
-            file_path: str,
-            file_types: list[str],
-            keep: list[str] = None,
-            ignore: list[str] = None,
-        ) -> bool:
-            for file_type in file_types:
-                if _fnmatch.fnmatch(
-                    file_path, f"*{file_type}"
-                ) and not _fnmatch.fnmatch(file_path, "*~$*"):
-                    if keep:
-                        for item in keep:
-                            if _fnmatch.fnmatch(file_path, f"*{item}*"):
-                                return True
-
-                    if ignore:
-                        for item in ignore:
-                            if _fnmatch.fnmatch(file_path, f"*{item}*"):
-                                return False
-
-                    return True
-            return False
 
         if include_subfolders:
             for path, subdirs, files in _os.walk(folder_path):
                 for name in files:
                     file_path = _os.path.join(path, name)
-
-                    if __is_valid_file(
-                        file_path, file_types, workbooks_to_include, workbooks_to_ignore
-                    ):
-                        file_data = self.__get_file_data(file_path)
-                        self.workbooks.append(file_data)
+                    self.__get_file_data(file_path, workbooks_to_ignore)
         else:
             for file in _os.listdir(folder_path):
                 file_path = _os.path.join(folder_path, file)
-
-                if __is_valid_file(
-                    file_path, file_types, workbooks_to_include, workbooks_to_ignore
-                ):
-                    file_data = self.__get_file_data(file_path)
-                    self.workbooks.append(file_data)
+                self.__get_file_data(file_path, workbooks_to_ignore)
 
         self.wb_count = len(self.workbooks)
 
         return self
 
     def load_file(self, file_path: str):
+        file_path = self.__relative_path_to_absolute(file_path)
         if not _os.path.exists(file_path):
             raise Exception("File not found")
         else:
-            self.workbooks.append(self.__get_file_data(file_path))
+            self.__get_file_data(file_path)
 
         self.wb_count = len(self.workbooks)
 
         return self
 
     def pipe_workbooks(
-        self, callback: _Callable[[Workbook, list[Workbook]], Workbook | None]
+        self, callback: _Callable[[Workbook, int, list[Workbook]], Workbook | None]
     ):
         new_parser = Parser().__reload_parser(self.workbooks)
         for index, wb in enumerate(new_parser.workbooks.copy()):
-            new_wb = callback(wb, new_parser.workbooks)
+            new_wb = callback(wb, index, new_parser.workbooks)
             if new_wb is not None:
                 new_parser.workbooks[index] = new_wb
 
