@@ -1,6 +1,7 @@
 # %%
 import pandas as _pd
 import os as _os
+import sys as _sys
 import fnmatch as _fnmatch
 import copy as _copy
 import re as _re
@@ -36,13 +37,6 @@ class Data:
     @property
     def columns(self):
         return self.__data.columns
-
-    def __extract_values(self, value):
-        if type(value) == str:
-            if _re.search(r"\[.*\]", value):
-                return value.split("[")[1].split("]")[0]
-
-        return value
 
     def __generate_headers(self, height: int = 1):
         df_ = self.__data
@@ -100,8 +94,6 @@ class Data:
             elif isinstance(var_names, str):
                 length = 1
 
-        df = df.map(self.__extract_values)
-
         cols = list(df.columns)
         cols[:column_width] = id_names
 
@@ -120,7 +112,14 @@ class Data:
         return Data(self.__data.dropna(how="all").reset_index(drop=True))
 
     def remove_empty_columns(self):
-        return Data(self.__data.dropna(axis=1, how="all").reset_index(drop=True))
+        df = self.__data.dropna(axis=1, how="all")
+        cols = df.columns
+        has_no_col_names = all(isinstance(x, int) for x in cols)
+
+        if has_no_col_names:
+            df.columns = list(range(len(df.columns)))
+
+        return Data(df)
 
     def remove_empty_rows_and_columns(self):
         return self.remove_empty_rows().remove_empty_columns()
@@ -351,9 +350,20 @@ class Parser:
 
     def __relative_path_to_absolute(self, path: str):
         if not _os.path.isabs(path):
-            cwd = _os.getcwd()
+            cwd = _sys.path[0]
             return _os.path.join(cwd, path)
         return path
+
+    @staticmethod
+    def extract_values(df: _pd.DataFrame):
+        def func(value):
+            if type(value) == str:
+                if _re.search(r"\[.*\]", value):
+                    return value.split("[")[1].split("]")[0]
+
+            return value
+
+        return df.map(func)
 
     def get_final_df(
         self, collection_name: str = None, attach_field_master: bool = True
@@ -376,6 +386,7 @@ class Parser:
         self.__replacements.append("ws_title")
         final_dataset = _pd.concat([self.__field_master, df], axis=1)
         final_dataset = final_dataset.reindex(columns=self.__replacements)
+        final_dataset = self.extract_values(final_dataset)
         return final_dataset
 
     def get_final_data(self, collection_name: str):
