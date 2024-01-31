@@ -86,17 +86,27 @@ class Data:
                 id_vars=list(df.columns[:column_width]),
                 value_vars=list(df.columns[column_width:]),
                 value_name=value_name,
-                var_name=var_names,
             )
             .dropna(subset=[value_name])
             .astype({value_name: "float"}, errors="ignore")
             .reset_index(drop=True)
         )
 
+        length = 0
+
+        if var_names:
+            if isinstance(var_names, (list, tuple)):
+                length = len(var_names)
+            elif isinstance(var_names, str):
+                length = 1
+
         df = df.map(self.__extract_values)
 
         cols = list(df.columns)
         cols[:column_width] = id_names
+
+        if length:
+            cols[column_width : length + column_width] = var_names
         df.columns = cols
 
         return df
