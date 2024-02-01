@@ -59,7 +59,8 @@ class Data:
         var_names: list[str] = ["TIME_PERIOD"],
         value_name: str = "OBS_VALUE",
         id_names: list[str] = ["Component"],
-        remove_nulls: bool = False,
+        remove_null_values: bool = False,
+        remove_null_labels: bool = True,
     ):
         if column_width != len(id_names):
             raise Exception("id_names must be the same length as width")
@@ -76,7 +77,7 @@ class Data:
                 cols[0] = id_names
                 df.columns = cols
 
-        if not remove_nulls:
+        if not remove_null_values:
             df.iloc[:, column_width:] = (
                 df.iloc[:, column_width:]
                 .fillna(value="placeholder")
@@ -111,6 +112,9 @@ class Data:
         if length:
             cols[column_width : length + column_width] = var_names
         df.columns = cols
+
+        if remove_null_labels:
+            df = df[~df.iloc[:, :column_width].isnull().sum(axis=1).astype(bool)]
 
         return df
 
