@@ -154,8 +154,8 @@ class Bounds:
     def __init__(self, data: _pd.DataFrame = None):
         self.__data = data if len(data.index) else _pd.DataFrame()
         self.__bounds = []
-        self.__max_rows = self.__data.shape[0]
-        self.__max_columns = self.__data.shape[1] if len(data.index) > 0 else 0
+        self.__max_rows = None
+        self.__max_columns = None
         self.__top_row_offset = 0
         self.__right_column_offset = 0
         self.__bottom_row_offset = 0
