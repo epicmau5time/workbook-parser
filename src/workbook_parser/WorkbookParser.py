@@ -59,6 +59,7 @@ class Data:
         var_names: list[str] = ["TIME_PERIOD"],
         value_name: str = "OBS_VALUE",
         id_names: list[str] = ["Component"],
+        remove_nulls: bool = False,
     ):
         if column_width != len(id_names):
             raise Exception("id_names must be the same length as width")
@@ -75,6 +76,13 @@ class Data:
                 cols[0] = id_names
                 df.columns = cols
 
+        if not remove_nulls:
+            df.iloc[:, column_width:] = (
+                df.iloc[:, column_width:]
+                .fillna(value="placeholder")
+                .reset_index(drop=True)
+            )
+
         df = (
             df.melt(
                 id_vars=list(df.columns[:column_width]),
@@ -82,8 +90,11 @@ class Data:
                 value_name=value_name,
             )
             .dropna(subset=[value_name])
-            .astype({value_name: "float"}, errors="ignore")
             .reset_index(drop=True)
+        )
+
+        df.loc[:, "OBS_VALUE"] = df.loc[:, "OBS_VALUE"].apply(
+            _pd.to_numeric, errors="coerce", downcast="float"
         )
 
         length = 0
