@@ -39,18 +39,32 @@ class Data:
         return self.__data.columns
 
     def __generate_headers(self, height: int = 1):
-        df_ = self.__data
-        if df_.shape[0] > height:
-            df_.iloc[0:height] = df_.iloc[0:height].ffill(axis=1)
-            df_.iloc[0:height] = df_.iloc[0:height].ffill(axis=0)
-            columns = _pd.MultiIndex.from_frame(
-                df_.iloc[:height].T.astype(str),
-                names=list(range(height)),
+        df = self.__data
+        if df.shape[0] > height:
+            columns = None
+            ph = "NA_PLACEHOLDER"
+            headers = (
+                df.iloc[:height, :]
+                .fillna(ph)
+                .astype(str)
+                .replace({ph: _pd.NA})
+                .ffill(axis=1)
+                .ffill(axis=0)
             )
-            df_ = df_.iloc[height:]
-            df_.columns = columns
 
-        return df_
+            if height > 1:
+                columns = _pd.MultiIndex.from_frame(
+                    headers.T.astype(str),
+                    names=list(range(height)),
+                )
+            elif height == 1:
+                columns = _pd.Index(headers.T.iloc[:, 0])
+            else:
+                raise Exception("Invalid height")
+
+        df = df.iloc[height:, :]
+        df.columns = columns
+        return df
 
     def to_pivoted_dataframe(
         self,
@@ -74,7 +88,7 @@ class Data:
                     cols[index] = (id_names[index],) * len(cols[index])
                 df.columns = _pd.MultiIndex.from_tuples(cols)
             else:
-                cols[0] = id_names
+                cols[:column_width] = id_names
                 df.columns = cols
 
         if not remove_null_values:
