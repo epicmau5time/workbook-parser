@@ -7,6 +7,7 @@ import copy as _copy
 import re as _re
 
 _pd.set_option("display.max_columns", None)
+_pd.set_option("future.no_silent_downcasting", True)
 from typing import Callable as _Callable
 
 
@@ -42,12 +43,8 @@ class Data:
         df = self.__data
         if df.shape[0] > height:
             columns = None
-            ph = "NA_PLACEHOLDER"
             headers = (
-                df.iloc[:height, :]
-                .fillna(ph)
-                .astype(str)
-                .replace({ph: _pd.NA})
+                _pd.DataFrame(df.iloc[:height, :], dtype=object)
                 .ffill(axis=1)
                 .ffill(axis=0)
             )
@@ -91,10 +88,12 @@ class Data:
                 cols[:column_width] = id_names
                 df.columns = cols
 
+        placeholder = 909090909
+
         if not remove_null_values:
             df.iloc[:, column_width:] = (
                 df.iloc[:, column_width:]
-                .fillna(value="placeholder")
+                .fillna(value=placeholder)
                 .reset_index(drop=True)
             )
 
@@ -108,8 +107,10 @@ class Data:
             .reset_index(drop=True)
         )
 
-        df.loc[:, "OBS_VALUE"] = df.loc[:, "OBS_VALUE"].apply(
-            _pd.to_numeric, errors="coerce", downcast="float"
+        df.loc[:, value_name] = (
+            df.loc[:, value_name]
+            .replace(placeholder, _pd.NA)
+            .apply(_pd.to_numeric, errors="coerce", downcast="float")
         )
 
         length = 0
