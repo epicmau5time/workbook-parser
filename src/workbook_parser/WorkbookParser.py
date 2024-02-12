@@ -66,7 +66,7 @@ class Data:
     def to_pivoted_dataframe(
         self,
         column_width: int = 1,
-        header_row_height: int = 1,
+        header_row_height: int | None = None,
         var_names: list[str] = ["TIME_PERIOD"],
         value_name: str = "OBS_VALUE",
         id_names: list[str] = ["Component"],
@@ -76,7 +76,10 @@ class Data:
         if column_width != len(id_names):
             raise Exception("id_names must be the same length as width")
 
-        df = self.__generate_headers(height=header_row_height)
+        if header_row_height and header_row_height > 0:
+            df = self.__generate_headers(height=header_row_height)
+        else:
+            df = self.__data
 
         if len(df.columns):
             cols = list(df.columns)
